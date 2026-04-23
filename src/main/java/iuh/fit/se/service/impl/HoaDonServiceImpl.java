@@ -1,5 +1,7 @@
 package iuh.fit.se.service.impl;
 
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
 import iuh.fit.se.dto.chitiethoadon.ChiTietHoaDonRequest;
 import iuh.fit.se.dto.chitiethoadon.ChiTietHoaDonResponse;
 import iuh.fit.se.dto.chitiethoadon.ToppingResponse;
@@ -10,11 +12,13 @@ import iuh.fit.se.enums.*;
 import iuh.fit.se.exception.*;
 import iuh.fit.se.mapper.HoaDonMapper;
 import iuh.fit.se.repository.*;
-import iuh.fit.se.service.HoaDonService;
-import iuh.fit.se.service.KhachHangService;
-import iuh.fit.se.service.KhuyenMaiService;
-import iuh.fit.se.service.PhieuDatBanService;
+import iuh.fit.se.service.*;
+import iuh.fit.se.utils.SecurityUtils;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -46,8 +50,10 @@ public class HoaDonServiceImpl implements HoaDonService {
     private final SanPhamRepository sanPhamRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ThuePhiRepository thuePhiRepository;
+    private final FirebaseRealtimeService firebaseRealtimeService;
+    private final FirebaseMessagingService firebaseMessagingService;
 
-    public HoaDonServiceImpl(HoaDonRepository hoaDonRepository, PhieuDatBanRepository phieuDatBanRepository, NhanVienRepository nhanVienRepository, KhachHangRepository khachHangRepository, BienTheSanPhamRepository bienTheRepository, KhachHangService khachHangService, HoaDonMapper hoaDonMapper, KhuyenMaiService khuyenMaiService, KhuyenMaiRepository khuyenMaiRepository, PhieuDatBanService phieuDatBanService, ChiTietDatBanRepository chiTietDatBanRepository, SanPhamRepository sanPhamRepository, ThuePhiRepository thuePhiRepository) {
+    public HoaDonServiceImpl(HoaDonRepository hoaDonRepository, PhieuDatBanRepository phieuDatBanRepository, NhanVienRepository nhanVienRepository, KhachHangRepository khachHangRepository, BienTheSanPhamRepository bienTheRepository, KhachHangService khachHangService, HoaDonMapper hoaDonMapper, KhuyenMaiService khuyenMaiService, KhuyenMaiRepository khuyenMaiRepository, PhieuDatBanService phieuDatBanService, ChiTietDatBanRepository chiTietDatBanRepository, SanPhamRepository sanPhamRepository, ThuePhiRepository thuePhiRepository, FirebaseRealtimeService firebaseRealtimeService, FirebaseMessagingService firebaseMessagingService) {
         this.hoaDonRepository = hoaDonRepository;
         this.phieuDatBanRepository = phieuDatBanRepository;
         this.nhanVienRepository = nhanVienRepository;
@@ -61,12 +67,15 @@ public class HoaDonServiceImpl implements HoaDonService {
         this.chiTietDatBanRepository = chiTietDatBanRepository;
         this.sanPhamRepository = sanPhamRepository;
         this.thuePhiRepository = thuePhiRepository;
+        this.firebaseRealtimeService = firebaseRealtimeService;
+        this.firebaseMessagingService = firebaseMessagingService;
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<HoaDonResponse> layTatCaHoaDon() {
-        return hoaDonRepository.findAll(Sort.by(Sort.Direction.DESC, "thoiGianTao"))
+        // Thay vì dùng findAll() mặc định, gọi hàm Native Query của mình
+        return hoaDonRepository.findAllInvoicesIncludingDeleted()
                 .stream()
                 .map(this::mapToResponseFull)
                 .collect(Collectors.toList());
@@ -98,12 +107,16 @@ public class HoaDonServiceImpl implements HoaDonService {
     @Override
     @Transactional
     public HoaDonResponse taoDonHangMoi(HoaDonRequest request, List<ChiTietHoaDonRequest> chiTiets) {
+
         HoaDon hd = hoaDonMapper.toEntity(request);
         apDungThuePhiMacDinh(hd);
 
-        NhanVien nv = nhanVienRepository.findById(request.idNhanVien())
-                .orElseThrow(() -> new ResourceNotFoundException("Nhân viên không tồn tại"));
-        hd.setNhanVien(nv);
+//        // LẤY ID TỪ SECURITY CONTEXT
+//        Integer idThuNgan = SecurityUtils.getCurrentIdNhanVien();
+//        if (idThuNgan == null) throw new AccessDeniedException("Vui lòng đăng nhập!");
+//
+//        // Gán thu ngân
+//        hd.setThuNgan(nhanVienRepository.getReferenceById(idThuNgan));
 
         if (request.loaiDonHang() == LoaiDonHang.TAI_BAN) {
             if (request.idPhieuDat() == null) throw new BadRequestException("Đơn tại bàn phải có ID Phiếu đặt!");
@@ -128,13 +141,19 @@ public class HoaDonServiceImpl implements HoaDonService {
         tinhToanTaiChinh(hd);
 
         HoaDon savedHd = hoaDonRepository.save(hd);
+
+        // REALTIME: Đẩy đơn mới lên màn hình Thu ngân/Bếp
+        updateOrderRealtime(savedHd);
+
+        // THÔNG BÁO: Báo cho topic 'staff' là có đơn hàng mới cần làm
+        firebaseMessagingService.sendNotificationToTopic("staff", "Đơn hàng mới", "Bàn " + getTenBans(savedHd) + " vừa gọi món.");
         return this.layChiTiet(savedHd.getIdHoaDon());
     }
 
     private void apDungThuePhiMacDinh(HoaDon hd) {
         List<ThuePhi> dsMacDinh = thuePhiRepository.findByLaMacDinhTrue();
         for (ThuePhi tp : dsMacDinh) {
-            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri()));
+            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri(), tp.getLoaiGiaTri()));
         }
     }
 
@@ -148,7 +167,7 @@ public class HoaDonServiceImpl implements HoaDonService {
         List<ThuePhi> dsChonThem = thuePhiRepository.findAllById(idThuePhisChonThem);
 
         for (ThuePhi tp : dsChonThem) {
-            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri()));
+            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri(), tp.getLoaiGiaTri()));
         }
 
         tinhToanTaiChinh(hd);
@@ -177,6 +196,7 @@ public class HoaDonServiceImpl implements HoaDonService {
                 .map(tp -> new HoaDonThuePhiResponse(
                         tp.getTenThuePhi(),
                         tp.getGiaTriTaiThoiDiemBan(),
+                        tp.getLoaiGiaTri(),
                         tp.getSoTienQuyDoi()
                 ))
                 .collect(Collectors.toList());
@@ -200,10 +220,10 @@ public class HoaDonServiceImpl implements HoaDonService {
                     ct.getBienThe().getSanPham().getTenSanPham(),
                     ct.getBienThe().getTenKichCo(),
                     ct.getSoLuong(),
-                    ct.getGiaThoiDiemBan(),
+                    ct.getGiaThoiDiemBan().longValue(),
                     ct.getTuyChonJson(),
                     toppingRes,
-                    thanhTienChuan
+                    thanhTienChuan.longValue()
             );
         }).collect(Collectors.toList());
 
@@ -212,7 +232,8 @@ public class HoaDonServiceImpl implements HoaDonService {
                 res.idPhieuDat(),
                 tenBans,
                 res.loaiDonHang(),
-                res.tenNhanVien(),
+                res.tenThuNgan(),
+                res.tenPhucVu(),
                 res.tenKhachHang(),
                 res.maKhuyenMai(),
                 res.tongTienHang(),
@@ -244,17 +265,51 @@ public class HoaDonServiceImpl implements HoaDonService {
 
         hd.setTrangThai(trangThaiMoi);
 
+        // CHẶN: Không cho phép cập nhật các trạng thái nghiệp vụ quan trọng qua hàm này
+        List<TrangThaiHoaDon> forbiddenStates = List.of(
+                TrangThaiHoaDon.DA_THANH_TOAN,
+                TrangThaiHoaDon.HOAN_TAT,
+                TrangThaiHoaDon.DA_HUY
+        );
+
+        if (forbiddenStates.contains(trangThaiMoi)) {
+            throw new BadRequestException("Không thể cập nhật trạng thái này trực tiếp. Vui lòng thực hiện qua chức năng Thanh toán hoặc Hủy đơn!");
+        }
+
+        // 1. Nếu hoàn tất hóa đơn -> Giải phóng bàn (Realtime Database)
         if (trangThaiMoi == TrangThaiHoaDon.HOAN_TAT && hd.getPhieuDatBan() != null) {
             phieuDatBanService.hoanTatPhieu(hd.getPhieuDatBan().getIdPhieuDat());
         }
 
+        // 2. THÔNG BÁO ĐẨY: Nếu món đã pha chế xong
+        if (trangThaiMoi == TrangThaiHoaDon.CHO_LAY_MON) {
+            String title = "☕ Món đã xong!";
+            String body = "Đơn hàng tại bàn " + getTenBans(hd) + " đã pha chế xong. Hãy tới quầy lấy món!";
+
+            // GIẢI PHÁP MỚI: Không thèm lấy idThuNgan nữa, gửi thông báo theo nhóm quyền (Topic)
+            // Tất cả máy app chạy quyền PHUC_VU đăng ký vào topic này sẽ nhận được hết
+            String topicName = "PHUC_VU";
+
+            try {
+                // Thay vì truyền fcmToken cá nhân, ông dùng hàm gửi theo Topic của Firebase
+                firebaseMessagingService.sendNotificationToTopic(topicName, title, body);
+            } catch (Exception e) {
+                System.out.println("⚠️ Lỗi gửi thông báo Topic: " + e.getMessage());
+            }
+        }
+
         hoaDonRepository.save(hd);
+
+        // 3. REALTIME: Cập nhật trạng thái đơn hàng để các máy khác thấy ngay
+        updateOrderRealtime(hd);
+
         return layChiTiet(idHoaDon);
     }
 
     @Override
     @Transactional
     public void huyHoaDon(Integer id) {
+        String finalHd1;
         HoaDon hd = hoaDonRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Hóa đơn không tồn tại"));
 
@@ -276,7 +331,24 @@ public class HoaDonServiceImpl implements HoaDonService {
 
         hd.setTrangThai(TrangThaiHoaDon.DA_HUY);
         hd.setThoiGianXoa(System.currentTimeMillis());
-        hoaDonRepository.save(hd);
+        HoaDon finalHd = hoaDonRepository.save(hd);
+
+        // --- 🌟 THÊM DÒNG NÀY ĐỂ REALTIME HOẠT ĐỘNG 🌟 ---
+        // Hàm này sẽ đẩy trạng thái "DA_HUY" lên Firebase giúp danh sách đơn hàng bên FE tự biến mất/cập nhật lại
+        updateOrderRealtime(finalHd);
+
+        // 🔔 🚨 THÔNG BÁO KHẨN CẤP ĐẾN TOÀN BỘ CÁC BÊN (FCM)
+        try {
+            String tenBan = finalHd.getPhieuDatBan() != null ? getTenBans(finalHd) : "Mang về";
+            String tieuDe = "🚨 CẢNH BÁO: HỦY ĐƠN HÀNG!";
+            String noiDung = "Hóa đơn #" + finalHd.getIdHoaDon() + " tại " + tenBan + " đã bị HỦY!";
+
+            firebaseMessagingService.sendNotificationToTopic("admin", tieuDe, noiDung);
+            firebaseMessagingService.sendNotificationToTopic("THU_NGAN", tieuDe, noiDung);
+            firebaseMessagingService.sendNotificationToTopic("PHUC_VU", tieuDe, noiDung);
+        } catch (Exception e) {
+            System.out.println("⚠️ Lỗi phát tán thông báo hủy đơn: " + e.getMessage());
+        }
     }
 
     @Override
@@ -292,7 +364,12 @@ public class HoaDonServiceImpl implements HoaDonService {
         napDanhSachMonVaoHoaDon(hd, requests);
         tinhToanTaiChinh(hd);
 
-        hoaDonRepository.save(hd);
+        HoaDon finalHd = hoaDonRepository.save(hd);
+
+        // --- 🌟 THÊM DÒNG REALTIME CHIẾN LƯỢC NÀY 🌟 ---
+        // Đẩy danh sách món mới + tổng tiền mới lên Firebase để màn hình Thu ngân tự nhảy số lập tức
+        updateOrderRealtime(finalHd);
+
         return layChiTiet(idHoaDon);
     }
 
@@ -371,8 +448,18 @@ public class HoaDonServiceImpl implements HoaDonService {
         hd.setTrangThai(TrangThaiHoaDon.CHO_THANH_TOAN);
         hd.setThoiGianYeuCau(LocalDateTime.now());
 
-        hoaDonRepository.save(hd);
+        HoaDon finalHd = hoaDonRepository.save(hd);
         hoaDonRepository.flush();
+
+        // 🔔 THÔNG BÁO ĐẾN THU NGÂN ĐỂ IN BILL
+        try {
+            String tenBan = finalHd.getPhieuDatBan() != null ? getTenBans(finalHd) : "Mang về";
+            firebaseMessagingService.sendNotificationToTopic("THU_NGAN",
+                    "💵 Khách gọi thanh toán!",
+                    tenBan + " đang yêu cầu thanh toán hóa đơn #" + finalHd.getIdHoaDon());
+        } catch (Exception e) {
+            System.out.println("⚠️ Lỗi thông báo yêu cầu thanh toán: " + e.getMessage());
+        }
 
         return layChiTiet(idHoaDon);
     }
@@ -382,6 +469,13 @@ public class HoaDonServiceImpl implements HoaDonService {
     public HoaDonResponse xuatHoaDonTamTinh(Integer id, ThanhToanRequest request) {
         HoaDon hd = hoaDonRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Không tìm thấy hóa đơn id = " + id));
+
+        // LẤY ID THU NGÂN TỪ TOKEN
+        Integer idThuNgan = SecurityUtils.getCurrentIdNhanVien();
+        if (idThuNgan == null) throw new AccessDeniedException("Chưa đăng nhập thu ngân!");
+
+        // Gán/Cập nhật thu ngân là người vừa nhấn xuất hóa đơn
+        hd.setThuNgan(nhanVienRepository.getReferenceById(idThuNgan));
 
         if (hd.getTrangThai().ordinal() >= TrangThaiHoaDon.DA_THANH_TOAN.ordinal()) {
             throw new BadRequestException("Hóa đơn đã thanh toán, không thể thay đổi thông tin tạm tính!");
@@ -406,6 +500,13 @@ public class HoaDonServiceImpl implements HoaDonService {
     public HoaDonResponse xacNhanThanhToan(Integer id, ThanhToanRequest request) {
         HoaDon hd = hoaDonRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Không tìm thấy hóa đơn id = " + id));
+
+        // LẤY ID THU NGÂN TỪ TOKEN
+        Integer idThuNgan = SecurityUtils.getCurrentIdNhanVien();
+        if (idThuNgan == null) throw new AccessDeniedException("Chưa đăng nhập thu ngân!");
+
+        // Gán/Cập nhật thu ngân là người vừa nhấn xuất hóa đơn
+        hd.setThuNgan(nhanVienRepository.getReferenceById(idThuNgan));
 
         if (hd.getTrangThai() == TrangThaiHoaDon.DA_THANH_TOAN || hd.getTrangThai() == TrangThaiHoaDon.HOAN_TAT) {
             throw new BadRequestException("Hóa đơn này đã được thanh toán rồi!");
@@ -441,9 +542,11 @@ public class HoaDonServiceImpl implements HoaDonService {
         hd.setPhuongThucThanhToan(request.phuongThuc());
         hd.setThoiGianThanhToan(LocalDateTime.now());
 
-        // 5. Tích điểm
+        // 5. TÍCH ĐIỂM (Quy đổi: 50.000đ = 1 điểm)
         if (hd.getKhachHang() != null) {
-            int diemMoi = hd.getTongThanhToan().divide(new BigDecimal("10000"), 0, RoundingMode.DOWN).intValue();
+            BigDecimal mocTichDiem = new BigDecimal("50000");
+            int diemMoi = hd.getTongThanhToan().divide(mocTichDiem, 0, RoundingMode.DOWN).intValue();
+
             if (diemMoi > 0) {
                 khachHangService.tichDiemVaThangHang(hd.getKhachHang().getIdKhachHang(), diemMoi);
             }
@@ -451,11 +554,34 @@ public class HoaDonServiceImpl implements HoaDonService {
 
         hd.setThongTinChiTiet(taoSnapshotText(hd));
 
+        // 6. TỰ ĐỘNG GIẢI PHÓNG BÀN (REALTIME DATABASE)
+        // Nếu là đơn tại bàn, gọi hàm hoanTatPhieu để đổi màu bàn sang XANH trên sơ đồ
+        if (hd.getPhieuDatBan() != null) {
+            phieuDatBanService.hoanTatPhieu(hd.getPhieuDatBan().getIdPhieuDat());
+        }
+
         if (hd.getLoaiDonHang() == LoaiDonHang.MANG_VE) {
             hd.setTrangThai(TrangThaiHoaDon.HOAN_TAT);
         }
 
-        return mapToResponseFull(hoaDonRepository.save(hd));
+        // 7. Lưu vào SQL
+        HoaDon finalHd = hoaDonRepository.save(hd);
+
+        // 8. CẬP NHẬT TRẠNG THÁI ĐƠN HÀNG REALTIME
+        // Để App Thu ngân/Quản lý cập nhật lại danh sách đơn hàng mà không cần F5
+        updateOrderRealtime(finalHd);
+
+        // 9. 🔔 THÔNG BÁO ĐẨY (FCM) - CHỈ GỬI CHO PHỤC VỤ
+        try {
+            String tenBan = finalHd.getPhieuDatBan() != null ? getTenBans(finalHd) : "Mang về";
+            firebaseMessagingService.sendNotificationToTopic("PHUC_VU",
+                    "✅ Bàn đã thanh toán",
+                    "Đơn hàng tại " + tenBan + " đã được thanh toán xong. Phục vụ chuẩn bị dọn bàn!");
+        } catch (Exception e) {
+            System.out.println("⚠️ Lỗi thông báo thanh toán cho Phục vụ: " + e.getMessage());
+        }
+
+        return mapToResponseFull(finalHd);
     }
 
     @Override
@@ -473,7 +599,24 @@ public class HoaDonServiceImpl implements HoaDonService {
             phieuDatBanService.hoanTatPhieu(hd.getPhieuDatBan().getIdPhieuDat());
         }
 
-        hoaDonRepository.save(hd);
+        HoaDon finalHd = hoaDonRepository.save(hd);
+
+        // 🔔 🌟 THÔNG BÁO TỔNG KẾT HOÀN TẤT ĐẾN TOÀN BỘ HỆ THỐNG
+        try {
+            String tenBan = finalHd.getPhieuDatBan() != null ? getTenBans(finalHd) : "Mang về";
+            String formatTien = String.format("%,.0f", finalHd.getTongThanhToan());
+
+            String tieuDe = "📈 Đơn hàng hoàn tất!";
+            String noiDung = "Hóa đơn #" + finalHd.getIdHoaDon() + " tại " + tenBan + " đã đóng ca. (Thu: " + formatTien + "đ)";
+
+            // Bắn thông báo đồng loạt cho cả 3 nhóm quầy
+            firebaseMessagingService.sendNotificationToTopic("admin", tieuDe, noiDung);
+            firebaseMessagingService.sendNotificationToTopic("THU_NGAN", tieuDe, "Hóa đơn #" + finalHd.getIdHoaDon() + " (" + tenBan + ") đã đóng ca thành công.");
+            firebaseMessagingService.sendNotificationToTopic("PHUC_VU", tieuDe, "Hệ thống đã giải phóng " + tenBan + ". Sẵn sàng đón lượt khách mới!");
+
+        } catch (Exception e) {
+            System.out.println("⚠️ Lỗi phát tán thông báo hoàn tất đơn: " + e.getMessage());
+        }
     }
 
     private void capNhatCauHinhGiamGiaVaThuePhi(HoaDon hd, ThanhToanRequest request) {
@@ -507,7 +650,7 @@ public class HoaDonServiceImpl implements HoaDonService {
         hd.getDanhSachThuePhi().clear();
         List<ThuePhi> dsCanApDung = thuePhiRepository.findAllById(finalIds);
         for (ThuePhi tp : dsCanApDung) {
-            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri()));
+            hd.getDanhSachThuePhi().add(new HoaDonThuePhi(hd, tp.getTenThuePhi(), tp.getGiaTri(), tp.getLoaiGiaTri()));
         }
     }
 
@@ -516,7 +659,13 @@ public class HoaDonServiceImpl implements HoaDonService {
         StringBuilder sb = new StringBuilder();
         sb.append("=== MATCHTEA BILL ===\n");
         sb.append("Ngày: ").append(LocalDateTime.now().format(formatter)).append("\n");
-        sb.append("NV: ").append(hd.getNhanVien().getHoTen()).append("\n");
+        // Sửa tên Thu ngân (người chốt bill)
+        sb.append("Thu ngân: ").append(hd.getThuNgan().getHoTen()).append("\n");
+
+        // Thêm tên Phục vụ (người mở bàn) nếu là đơn tại bàn
+        if (hd.getPhieuDatBan() != null && hd.getPhieuDatBan().getNhanVienPhucVu() != null) {
+            sb.append("Phục vụ : ").append(hd.getPhieuDatBan().getNhanVienPhucVu().getHoTen()).append("\n");
+        }
         sb.append("---------------------\n");
 
         hd.getDanhSachChiTiet().forEach(ct -> {
@@ -557,7 +706,7 @@ public class HoaDonServiceImpl implements HoaDonService {
             if (trungMon.isPresent()) {
                 ChiTietHoaDon existingCt = trungMon.get();
                 existingCt.setSoLuong(existingCt.getSoLuong() + req.soLuong());
-                // Cập nhật lại phần trăm giảm giá mới nhất từ DB nếu cần (tùy nghiệp vụ)
+
                 existingCt.setPhanTramGiamGia(bt.getPhanTramGiamGia());
             } else {
                 ChiTietHoaDon ct = new ChiTietHoaDon();
@@ -684,18 +833,29 @@ public class HoaDonServiceImpl implements HoaDonService {
 
         if (hd.getDanhSachThuePhi() != null) {
             for (HoaDonThuePhi tp : hd.getDanhSachThuePhi()) {
-                BigDecimal tiLe = BigDecimal.valueOf(tp.getGiaTriTaiThoiDiemBan());
+                BigDecimal giaTri = BigDecimal.valueOf(tp.getGiaTriTaiThoiDiemBan());
                 BigDecimal tienQuyDoi;
 
-                if (hd.getKhuyenMai() != null && hd.getKhuyenMai().getLaGiamGiaSauThue()) {
-                    tienQuyDoi = tongTienHang.subtract(giamGiaTV).multiply(tiLe);
+                // KIỂM TRA LOẠI GIÁ TRỊ (PHAN_TRAM hay TIEN_MAT)
+                if (tp.getLoaiGiaTri() == LoaiGiaTriThuePhi.PHAN_TRAM) {
+                    // Nếu là phần trăm, tính dựa trên số tiền sau giảm (hoặc trước giảm tùy loại KM)
+                    BigDecimal baseAmount;
+                    if (hd.getKhuyenMai() != null && hd.getKhuyenMai().getLaGiamGiaSauThue()) {
+                        baseAmount = tongTienHang.subtract(giamGiaTV);
+                    } else {
+                        baseAmount = soTienSauGiam;
+                    }
+
+                    // Công thức: (Số tiền * Phần trăm) / 100
+                    tienQuyDoi = baseAmount.multiply(giaTri)
+                            .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
                 } else {
-                    tienQuyDoi = soTienSauGiam.multiply(tiLe);
+                    // Nếu là tiền mặt (VND), giữ nguyên giá trị đó cộng vào bill
+                    tienQuyDoi = giaTri.setScale(2, RoundingMode.HALF_UP);
                 }
 
-                BigDecimal tienTron = tienQuyDoi.setScale(2, RoundingMode.HALF_UP);
-                tp.setSoTienQuyDoi(tienTron);
-                tongTienThuePhi = tongTienThuePhi.add(tienTron);
+                tp.setSoTienQuyDoi(tienQuyDoi);
+                tongTienThuePhi = tongTienThuePhi.add(tienQuyDoi);
             }
         }
         hd.setTongTienThue(tongTienThuePhi);
@@ -712,5 +872,53 @@ public class HoaDonServiceImpl implements HoaDonService {
         hd.setTongThanhToan(tongCuoi.compareTo(BigDecimal.ZERO) < 0
                 ? BigDecimal.ZERO
                 : tongCuoi.setScale(2, RoundingMode.HALF_UP));
+    }
+
+    // 1. Hàm lấy danh sách tên bàn từ hóa đơn để hiển thị trong nội dung thông báo
+    private String getTenBans(HoaDon hd) {
+        if (hd.getPhieuDatBan() == null) return "Mang về";
+        return chiTietDatBanRepository.findByPhieuDatBan_IdPhieuDat(hd.getPhieuDatBan().getIdPhieuDat())
+                .stream()
+                .map(ct -> ct.getBan().getTenBan())
+                .collect(Collectors.joining(", "));
+    }
+
+    // 2. Hàm cập nhật trạng thái đơn hàng lên Firebase Realtime Database
+    private void updateOrderRealtime(HoaDon hd) {
+        try {
+            DatabaseReference ref = FirebaseDatabase.getInstance().getReference("orders/" + hd.getIdHoaDon());
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("idHoaDon", hd.getIdHoaDon());
+            data.put("trangThai", hd.getTrangThai().name());
+
+            // SỬA TẠI ĐÂY: Chuyển BigDecimal thành double
+            if (hd.getTongThanhToan() != null) {
+                data.put("tongThanhToan", hd.getTongThanhToan().doubleValue());
+            } else {
+                data.put("tongThanhToan", 0.0);
+            }
+
+            data.put("lastUpdate", System.currentTimeMillis());
+
+            ref.setValueAsync(data);
+            System.out.println(">>> Đã cập nhật Realtime cho hóa đơn: " + hd.getIdHoaDon());
+        } catch (Exception e) {
+            System.err.println("Lỗi cập nhật Realtime Order: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public Page<HoaDonResponse> layLichSuHoaDonKhachHang(Integer idKhachHang, int page, int size) {
+
+        if (!khachHangRepository.existsById(idKhachHang)) {
+            throw new ResourceNotFoundException("Khách hàng không tồn tại");
+        }
+
+        Pageable pageable = PageRequest.of(page, size);
+        Page<HoaDon> hoaDons = hoaDonRepository.findByKhachHang_IdKhachHangOrderByThoiGianTaoDesc(idKhachHang, pageable);
+
+        // Chuyển đổi từ Page<Entity> sang Page<Response>
+        return hoaDons.map(this::mapToResponseFull);
     }
 }
