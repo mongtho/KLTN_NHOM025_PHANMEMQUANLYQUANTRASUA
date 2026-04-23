@@ -3,6 +3,8 @@ package iuh.fit.se.repository;
 import iuh.fit.se.entity.HoaDon;
 import iuh.fit.se.enums.LoaiDonHang;
 import iuh.fit.se.enums.TrangThaiHoaDon;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -57,7 +59,8 @@ public interface HoaDonRepository extends JpaRepository<HoaDon, Integer> {
     long demSoDonHang(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
 
     //Tìm món bán chạy nhất
-    @Query("SELECT ct.bienThe.sanPham.tenSanPham, SUM(ct.soLuong) as total " +
+    // Tìm món bán chạy nhất (Trả về ID sản phẩm và Số lượng)
+    @Query("SELECT ct.bienThe.sanPham.idSanPham, SUM(ct.soLuong) as total " +
             "FROM ChiTietHoaDon ct " +
             "WHERE ct.hoaDon.thoiGianThanhToan BETWEEN :start AND :end " +
             "GROUP BY ct.bienThe.sanPham.idSanPham " +
@@ -72,4 +75,62 @@ public interface HoaDonRepository extends JpaRepository<HoaDon, Integer> {
             "GROUP BY HOUR(h.thoiGianThanhToan) " +
             "ORDER BY HOUR(h.thoiGianThanhToan)")
     List<Object[]> getDoanhThuTheoGio(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    @Query("SELECT h.loaiDonHang, COUNT(h) FROM HoaDon h " +
+            "WHERE h.thoiGianTao BETWEEN :start AND :end AND h.thoiGianXoa = 0 " +
+            "GROUP BY h.loaiDonHang")
+    List<Object[]> countOrderByLoai(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    @Query("SELECT HOUR(h.thoiGianTao), COUNT(h) FROM HoaDon h " +
+            "WHERE h.thoiGianTao BETWEEN :start AND :end AND h.thoiGianXoa = 0 " +
+            "GROUP BY HOUR(h.thoiGianTao)")
+    List<Object[]> countOrderByHour(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    // 1. TOP 5 BÁN CHẠY NHẤT
+    //(Chỉ lấy món nước, loại bỏ Topping)
+    @Query("SELECT sp.tenSanPham, SUM(ct.soLuong) as total " +
+            "FROM ChiTietHoaDon ct " +
+            "JOIN ct.bienThe bt " +
+            "JOIN bt.sanPham sp " +
+            "WHERE ct.hoaDon.thoiGianTao BETWEEN :start AND :end " +
+            "AND ct.hoaDon.thoiGianXoa = 0 " +
+            "AND sp.laTopping = false " + //Chỉ lấy sản phẩm KHÔNG PHẢI là topping
+            "GROUP BY sp.idSanPham, sp.tenSanPham " +
+            "ORDER BY total DESC")
+    List<Object[]> findTop5BestSellers(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end, Pageable pageable);
+
+    // 2. TOP 5 BÁN CHẬM NHẤT (Chỉ lấy món nước, loại bỏ Topping)
+    @Query("SELECT sp.tenSanPham, COALESCE(SUM(ct.soLuong), 0) as total " +
+            "FROM SanPham sp " +
+            "LEFT JOIN sp.danhSachBienThe bt " +
+            "LEFT JOIN ChiTietHoaDon ct ON ct.bienThe = bt " +
+            "  AND ct.hoaDon.thoiGianTao BETWEEN :start AND :end " +
+            "  AND ct.hoaDon.thoiGianXoa = 0 " +
+            "WHERE sp.thoiGianXoa = 0 " +
+            "AND sp.laTopping = false " + //Loại bỏ hoàn toàn các mặt hàng topping ra khỏi bảng bán chậm
+            "GROUP BY sp.idSanPham, sp.tenSanPham " +
+            "ORDER BY total ASC")
+    List<Object[]> findTop5WorstSellers(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end, Pageable pageable);
+    // Lấy lịch sử hóa đơn của 1 khách hàng
+    Page<HoaDon> findByKhachHang_IdKhachHangOrderByThoiGianTaoDesc(Integer idKhachHang, Pageable pageable);
+
+    @Query("SELECT tp.topping.idSanPham, tp.topping.tenSanPham, tp.topping.duongDanAnh, COUNT(tp) " +
+            "FROM ChiTietHoaDon ct " +
+            "JOIN ct.danhSachTopping tp " +
+            "WHERE ct.bienThe.sanPham.idSanPham = :idSpChinh " +
+            "GROUP BY tp.topping.idSanPham, tp.topping.tenSanPham, tp.topping.duongDanAnh " +
+            "ORDER BY COUNT(tp) DESC")
+    List<Object[]> findTopToppingsForProduct(@Param("idSpChinh") Integer idSpChinh, Pageable pageable);
+
+    @Query("SELECT h.phuongThucThanhToan, COUNT(h) FROM HoaDon h " +
+            "WHERE h.thoiGianTao BETWEEN :start AND :end " +
+            "AND h.thoiGianXoa = 0 " +
+            "AND h.trangThai IN (iuh.fit.se.enums.TrangThaiHoaDon.DA_THANH_TOAN, iuh.fit.se.enums.TrangThaiHoaDon.HOAN_TAT) " +
+            "AND h.phuongThucThanhToan IS NOT NULL " +
+            "GROUP BY h.phuongThucThanhToan")
+    List<Object[]> countOrderByPhuongThucThanhToan(@Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
+    // Dùng nativeQuery = true để bỏ qua điều kiện thoi_gian_xoa = 0 của Hibernate
+    @Query(value = "SELECT * FROM hoa_don ORDER BY thoi_gian_tao DESC", nativeQuery = true)
+    List<HoaDon> findAllInvoicesIncludingDeleted();
 }
