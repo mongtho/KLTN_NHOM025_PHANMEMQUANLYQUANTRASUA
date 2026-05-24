@@ -1,0 +1,217 @@
+import { StyleSheet, Dimensions } from 'react-native';
+
+const { width } = Dimensions.get('window');
+const isTablet = width > 768;
+
+const COLORS = {
+  primary: '#2D5A27',
+  bgLight: '#E8F5E9',
+  white: '#FFFFFF',
+  gold: '#D4AF37',
+  textHeader: '#2D5A27',
+  textSub: '#6B7280',
+  inputBg: 'rgba(255, 255, 255, 0.9)',
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    flexDirection: isTablet ? 'row' : 'column',
+    backgroundColor: COLORS.bgLight,
+  },
+  brandSide: {
+    flex: isTablet ? 1.2 : 0, 
+    display: isTablet ? 'flex' : 'none',
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bgImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  blurOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(232, 245, 233, 0.65)',
+  },
+  brandTitleWrap: {
+    position: 'absolute',
+    top: 30,
+    left: 40,
+    zIndex: 10,
+    flexDirection: 'column',
+  },
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  logoIcon: {
+    fontSize: isTablet ? 28 : 24,
+    marginRight: 6,
+    textShadowColor: 'rgba(255,255,255,0.8)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  brandTitle: {
+    fontSize: isTablet ? 28 : 24,
+    fontWeight: '900',
+    color: '#064E3B', 
+    textShadowColor: 'rgba(255,255,255,0.8)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  brandSubtitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
+    letterSpacing: 2,
+    marginTop: -2,
+    marginLeft: 4, 
+    opacity: 0.9,
+  },
+  formSide: {
+    flex: 1,
+    backgroundColor: isTablet ? COLORS.white : COLORS.bgLight, 
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  cornerBlob: {
+    position: 'absolute',
+    bottom: -150,
+    right: -100,
+    width: 400,
+    height: 400,
+    borderRadius: 200,
+    backgroundColor: 'rgba(209, 250, 229, 0.4)', // Nghệ thuật góc
+  },
+  cornerBlob2: {
+    position: 'absolute',
+    top: -100,
+    right: -150,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(232, 245, 233, 0.5)',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    zIndex: 2,
+  },
+  formWrapper: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: 'rgba(0, 0, 0, 0.03)', // Kính mờ hơi đen
+    padding: 32,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.9)',
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 0, 
+  },
+  headerText: {
+    fontSize: isTablet ? 32 : 28,
+    fontWeight: '800',
+    color: COLORS.textHeader,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subHeaderText: {
+    fontSize: 16,
+    color: COLORS.textSub,
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.inputBg,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#D1FAE5',
+    marginBottom: 20,
+    height: 56,
+    paddingHorizontal: 16,
+  },
+  icon: {
+    fontSize: 20,
+    marginRight: 10,
+    color: '#9CA3AF',
+  },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    color: '#374151',
+    height: '100%',
+  },
+  submitBtnWrapper: {
+    width: '100%',
+    height: 56,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginTop: 10,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  btnGradient: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  submitBtnText: {
+    color: COLORS.white,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  switchLink: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 24,
+  },
+  switchText1: {
+    color: COLORS.textSub,
+    fontSize: 15,
+  },
+  switchText2: {
+    color: COLORS.gold,
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  forgotPassword: {
+    alignSelf: 'flex-end',
+    marginTop: -12,
+    marginBottom: 15,
+    paddingRight: 4,
+  },
+  forgotPasswordText: {
+    color: COLORS.textSub,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  errorText: {
+    color: '#EF4444',
+    fontSize: 13,
+    marginTop: -12,
+    marginBottom: 15,
+    paddingLeft: 4,
+    fontWeight: '500',
+  },
+  eyeIconContainer: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  eyeIcon: {
+    fontSize: 20,
+    opacity: 0.7,
+  },
+});
+
+export default styles;
